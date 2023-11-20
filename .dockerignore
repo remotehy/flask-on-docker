@@ -1,0 +1,7 @@
+.dockerignore
+.vscode/
+.gitignore
+.gitlab-ci.yml
+.git/
+**/__pycache__
+**/*.pyc

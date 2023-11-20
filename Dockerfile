@@ -1,0 +1,50 @@
+# #################################################################################################################
+# 第一阶段: 构建
+# #################################################################################################################
+FROM python:3.12.0-slim as builder
+
+# 锁定 poetry 的版本, 避免 poetry 本身升级导致的兼容性破坏
+RUN ["pip", "install", "poetry==1.7.0"]
+
+# 设定几个 poetry 相关的环境变量, 主要的目的就是让构建更加稳定可复现; 并且在镜像中还是使用 venv 可以进一步隔离 python 环境, 减少冲突
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /usr/src/app
+
+# 只拷贝 poetry install  依赖必要的东西, 暂时不需要拷贝当前项目的代码, 这样可以进一步提高项目缓存的程度
+COPY pyproject.toml poetry.lock ./
+# 在最终的镜像里面 我们并不需要一个真实的 README.md 文件, 但是因为 poetry 构建需要,
+# 我们可以创建一个空的, 这样及时本地修改过这个 READMD, 也不会影响构建缓存
+RUN touch README.md
+
+# 开发依赖不需要安装, 并且通过 --no-root 指定不需要安装当前项目, 这样本地代码的变更(依赖不变的情况下) 可以更好复用缓存
+# 在同一个 RUN 指令中, 安装完成之后, 清理 poetry_cache, 进一步缩小镜像体积
+#RUN poetry install --without dev --no-root && rm -rf $POETRY_CACHE_DIR
+RUN poetry install --no-root && rm -rf $POETRY_CACHE_DIR
+
+# #################################################################################################################
+# 第二阶段: 运行镜像
+# #################################################################################################################
+FROM python:3.12.0-slim as runtime
+
+WORKDIR /usr/src/app
+
+# install system dependencies
+RUN apt-get update && apt-get install -y netcat-traditional
+
+# 通过 VIRTUAL_ENV 字段来指定虚拟环境
+ENV VIRTUAL_ENV=/usr/src/app/.venv \
+    PATH="/usr/src/app/.venv/bin:$PATH"
+
+COPY --from=builder ${VIRTUAL_ENV} ${VIRTUAL_ENV}
+COPY flask_on_docker ./flask_on_docker
+COPY manage.py ./
+COPY entrypoint.sh ./
+# 指定了 VIRTUAL_ENV 之后, 不载需要通过 poetry run 来启动了(效果其实本质就是通过 poetry 指定 venv )
+# ENTRYPOINT ["python", "-m", "poetry_docker.main"]
+ENTRYPOINT ["/usr/src/app/entrypoint.sh"]
